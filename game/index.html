@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOLMARA — An Open-World Crime Story</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0c14;
+    font-family: 'Segoe UI', system-ui, sans-serif; }
+  #wrap { position: relative; width: 1280px; height: 800px; margin: 0 auto; }
+  canvas#gl { position: absolute; inset: 0; width: 1280px; height: 800px; display: block; background: #1a2440; }
+  canvas#game { position: absolute; inset: 0; display: block; width: 1280px; height: 800px; background: transparent; }
+  .menu { position: absolute; inset: 0; display: none; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: linear-gradient(180deg, rgba(8,10,24,0.55) 0%, rgba(8,10,24,0.82) 100%);
+    color: #fff; z-index: 10; }
+  .title { font-size: 92px; font-weight: 900; letter-spacing: 10px; line-height: 0.95;
+    background: linear-gradient(180deg, #ffe93c 15%, #ff7a1a 55%, #ff2e88 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 0 42px rgba(255, 122, 26, 0.35); }
+  .subtitle { font-size: 19px; letter-spacing: 7px; color: #9fd4ff; margin-top: 10px; }
+  .tagline { font-size: 14px; color: rgba(255,255,255,0.75); margin-top: 18px; max-width: 640px;
+    line-height: 1.6; font-style: italic; }
+  .btn { display: block; width: 300px; margin: 8px auto; padding: 13px 20px;
+    font-size: 17px; font-weight: 700; letter-spacing: 3px; color: #fff;
+    background: linear-gradient(180deg, #ff7a1a, #e85d04); border: 2px solid rgba(255,255,255,0.35);
+    border-radius: 8px; cursor: pointer; transition: transform .08s, box-shadow .08s; }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(255,122,26,0.45); }
+  .btn.secondary { background: linear-gradient(180deg, #2a4a66, #1a2f45); }
+  .btnrow { margin-top: 26px; }
+  .controls { margin-top: 24px; font-size: 12.5px; color: rgba(255,255,255,0.65); line-height: 1.9;
+    background: rgba(0,0,0,0.35); padding: 12px 22px; border-radius: 8px; }
+  .controls b { color: #ffe93c; }
+  .big { font-size: 84px; font-weight: 900; letter-spacing: 12px; }
+  .sub { font-size: 18px; color: rgba(255,255,255,0.85); margin-top: 8px; }
+  #toast { position: absolute; top: 92px; left: 50%; transform: translate(-50%, -12px);
+    opacity: 0; transition: opacity .3s, transform .3s; z-index: 9; text-align: center;
+    pointer-events: none; }
+  #toast-title { font-size: 26px; font-weight: 900; letter-spacing: 3px; color: #ffe93c;
+    text-shadow: 0 2px 12px rgba(0,0,0,0.8); }
+  #toast-sub { font-size: 14px; color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,0.9); margin-top: 4px; }
+  #credit { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; color: rgba(255,255,255,0.5); z-index: 5; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="gl" width="1280" height="800"></canvas>
+  <canvas id="game" width="1280" height="800"></canvas>
+
+  <div id="toast"><div id="toast-title"></div><div id="toast-sub"></div></div>
+
+  <div class="menu" id="menu-start" style="display:flex">
+    <div class="title">SOLMARA</div>
+    <div class="subtitle">AN OPEN-WORLD CRIME STORY</div>
+    <div class="tagline" id="story-intro"></div>
+    <div class="btnrow">
+      <button class="btn" id="btn-new">▶ NEW GAME</button>
+      <button class="btn secondary" id="btn-continue">CONTINUE</button>
+      <button class="btn secondary" id="btn-sound">SOUND: ON</button>
+    </div>
+    <div class="controls">
+      <b>WASD / Arrows</b> move &amp; drive &nbsp;·&nbsp; <b>Mouse</b> aim &nbsp;·&nbsp; <b>Click</b> shoot<br>
+      <b>E</b> steal / exit car / shop &nbsp;·&nbsp; <b>Shift</b> run &nbsp;·&nbsp; <b>Space</b> handbrake &nbsp;·&nbsp; <b>H</b> horn<br>
+      <b>N</b> NOS boost &nbsp;·&nbsp; <b>R</b> radio &nbsp;·&nbsp; <b>1/2/3</b> weapons &nbsp;·&nbsp; <b>Esc / P</b> pause &nbsp;·&nbsp; <b>M</b> mute
+    </div>
+  </div>
+
+  <div class="menu" id="menu-pause">
+    <div class="big" style="font-size:56px">PAUSED</div>
+    <div class="sub">Solmara waits. The sun does not.</div>
+    <div class="btnrow">
+      <button class="btn" id="btn-resume">RESUME</button>
+      <button class="btn secondary" id="btn-save">SAVE GAME</button>
+      <button class="btn secondary" id="btn-restart-mission">RESTART MISSION</button>
+      <button class="btn secondary" id="btn-quit">QUIT TO MENU</button>
+    </div>
+  </div>
+
+  <div class="menu" id="menu-gameover">
+    <div class="big" id="gameover-title">WASTED</div>
+    <div class="sub" id="gameover-stats"></div>
+    <div class="btnrow">
+      <button class="btn" id="btn-retry">↻ TRY AGAIN</button>
+      <button class="btn secondary" id="btn-menu">MAIN MENU</button>
+    </div>
+  </div>
+
+  <div class="menu" id="menu-shop">
+    <div class="big" style="font-size:44px;color:#3aff7a">GUN SHOP</div>
+    <div class="sub" id="shop-cash">YOUR CASH: $0</div>
+    <div class="btnrow">
+      <button class="btn" id="btn-buy-shotgun">PUMP SHOTGUN — $800</button>
+      <button class="btn" id="btn-buy-smg">STREET SMG — $1,200</button>
+      <button class="btn secondary" id="btn-buy-shells">SHOTGUN SHELLS x24 — $150</button>
+      <button class="btn secondary" id="btn-buy-smg-ammo">SMG ROUNDS x120 — $150</button>
+      <button class="btn secondary" id="btn-buy-armor">BODY ARMOR +50 HP — $300</button>
+      <button class="btn secondary" id="btn-shop-close">CLOSE (ESC)</button>
+    </div>
+    <div class="sub" style="margin-top:14px">Switch weapons with 1 / 2 / 3 while on foot.</div>
+  </div>
+
+  <div class="menu" id="menu-complete">
+    <div class="big" id="complete-title" style="font-size:56px;color:#7dff9a">MISSION COMPLETE</div>
+    <div class="sub" id="complete-sub"></div>
+  </div>
+
+  <div id="credit">SOLMARA · an original open-world crime game · not affiliated with any commercial game</div>
+</div>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
