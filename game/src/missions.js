@@ -2,12 +2,14 @@
 // plus cash bundles hidden around the city as a side activity.
 import { MISSIONS } from './config.js';
 import { range, pick } from './random.js';
+import { GANG_LOOK } from './meshes.js';
 import { showMenu } from './hud.js';
 
-function makeEnemy(game, x, y) {
+export function makeEnemy(game, x, y) {
   return {
     x, y, angle: 0, hp: 100, speed: 132, shootCd: range(game.rng, 0.4, 1.2),
     walkPhase: range(game.rng, 0, 6), shirt: '#3a3f4a', skin: '#c98a5a',
+    kind: 'gang', look: GANG_LOOK,
   };
 }
 
@@ -15,9 +17,12 @@ export function startMission(game, index) {
   const def = MISSIONS[index];
   const prev = game.mission;
   if (!def) { game.mission = null; game.storyDone = true; return; }
+  // each mission gets its own beacon colour in the 3D world (yellow = fetch,
+  // red = fight, green = escape) so the pillar reads at a glance.
+  const beaconColor = def.id === 4 || def.id === 8 ? 0xff4040 : def.id === 3 ? 0x3aff7a : 0xffe93c;
   game.mission = {
     def, index, stage: 0, timer: 0, kills: 0, killsNeeded: 0,
-    hasPackage: false, comet: null, done: false,
+    hasPackage: false, comet: null, done: false, beaconColor,
   };
   game.showToast(def.name + ' — ' + def.giver, def.brief);
   game.audio.missionStart();
@@ -82,7 +87,7 @@ export function missionTarget(game) {
     case 3: return { x: w.safehouse.x, y: w.safehouse.y, label: 'Safehouse' };
     case 4: return { x: w.warehouse.x, y: w.warehouse.y, label: 'Warehouse District' };
     case 5:
-      if (m.stage === 0) return { x: w.tower.x, y: w.tower.y, label: 'Downtown Tower' };
+      if (m.stage === 0) return { x: w.tower.x, y: w.tower.y, label: 'Downtown Tower — by SOLMARA BANK' };
       if (m.stage === 1) return { x: w.tower.x + 40, y: w.tower.y + 40, label: 'Steal the Comet GT' };
       return { x: w.pier.x + 120, y: w.pier.y + 20, label: 'The Pier' };
     case 6:

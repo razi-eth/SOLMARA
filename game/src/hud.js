@@ -52,8 +52,16 @@ export function drawHUD(game) {
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 16px monospace'; ctx.textAlign = 'center';
   ctx.fillText(String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0'), CFG.VIEW_W - 66, 33);
+  // graphics quality chip (ULTRA / HIGH / FAST) under the clock
+  const qNames = ['FAST', 'HIGH', 'ULTRA'];
+  const q = game.render3d ? game.render3d.quality : 2;
+  ctx.fillStyle = 'rgba(8,10,18,0.5)';
+  ctx.beginPath(); ctx.roundRect(CFG.VIEW_W - 118, 46, 104, 18, 8); ctx.fill();
+  ctx.fillStyle = q === 2 ? '#7dff9a' : 'rgba(255,255,255,0.75)';
+  ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('GFX: ' + qNames[q] + ' · G', CFG.VIEW_W - 66, 59);
   drawMinimap(ctx, game, CFG.VIEW_W - 236, 52, 220);
-  // --- bottom-left: objective ---
+  // --- bottom-left: objective + nearest landmark ---
   const obj = game.missionObjective ? game.missionObjective() : '';
   if (obj) {
     ctx.fillStyle = 'rgba(8,10,18,0.6)';
@@ -64,6 +72,30 @@ export function drawHUD(game) {
     ctx.fillStyle = '#fff';
     ctx.font = '12px monospace';
     ctx.fillText(obj, 26, CFG.VIEW_H - 20);
+  }
+  // landmark chip: where you are right now (L toggles the full legend)
+  if (game.nearLandmark) {
+    ctx.fillStyle = 'rgba(8,10,18,0.6)';
+    ctx.beginPath(); ctx.roundRect(14, CFG.VIEW_H - 92, 280, 26, 8); ctx.fill();
+    ctx.fillStyle = game.nearLandmark.color;
+    ctx.beginPath(); ctx.arc(28, CFG.VIEW_H - 79, 5, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 12px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('📍 ' + game.nearLandmark.name, 40, CFG.VIEW_H - 75);
+  }
+  if (game.showLandmarks && game.world.landmarks) {
+    ctx.fillStyle = 'rgba(8,10,18,0.82)';
+    ctx.beginPath(); ctx.roundRect(14, 92, 250, 22 + game.world.landmarks.length * 16, 10); ctx.fill();
+    ctx.fillStyle = '#ffe93c';
+    ctx.font = 'bold 12px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('LANDMARKS — press L to hide', 26, 110);
+    ctx.font = '11px monospace';
+    game.world.landmarks.forEach((lm, i) => {
+      ctx.fillStyle = lm.color;
+      ctx.beginPath(); ctx.arc(30, 120 + i * 16, 4, 0, 7); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillText(lm.name, 42, 124 + i * 16);
+    });
   }
   // --- bottom-right: speed / weapon / radio / NOS ---
   if (!p.onFoot && p.car) {

@@ -9,6 +9,31 @@ export const CFG = {
   TILE: 40,
 };
 
+// Graphics tuning for the hyper-realistic pass (render3d.js reads these).
+// ULTRA = 2048px PCFSoft shadows + full env reflections; HIGH = 1024px;
+// FAST = shadows off. G cycles them in-game; screenshots always use ULTRA.
+export const GRAPHICS = {
+  envIntensity: 0.55,       // scene.environmentIntensity (reflections strength)
+  exposure: 1.12,           // ACESFilmicToneMapping exposure
+  shadowUltra: 2048,        // shadow map size at ULTRA
+  shadowHigh: 1024,         // shadow map size at HIGH
+  facadeGlowDay: 0.12,      // lit-window emissive by day
+  facadeGlowNight: 1.02,    // lit-window emissive at full night
+  headlightBeam: 0.16,      // headlight cone opacity at night
+  lightPool: 0.35,          // headlight road-pool opacity at night
+};
+
+// Landmark interactions: the gas station refills NOS, the bar heals you on
+// foot, and walking into a new landmark's area shows its name.
+export const LANDMARK_TUNING = {
+  toastRadius: 220,   // nearestLandmark() range (also in landmarks.js)
+  gasRadius: 95,      // NOS refill zone around the gas pumps
+  gasRefill: 30,      // NOS points per second at the pumps
+  barRadius: 75,      // heal zone around the bar
+  barHeal: 5,         // HP per second at the bar
+  coasterRadius: 220, // rollercoaster whoosh ambience range
+};
+
 // Sun-soaked coastal palette (day). Night/dusk palettes are interpolated in render3d.js.
 export const PAL = {
   asphalt: '#3a3f4a',
@@ -50,6 +75,14 @@ export const DAY_KEYS = [
 export const TUNING = {
   playerWalk: 170,       // px/s on foot
   playerRun: 265,
+  // character rig (meshes.js): real-proportion articulated people, ~27 units
+  // tall; walk swing in radians, body bob in units, gun height for muzzle
+  // flashes and blood in the 3D particle pass.
+  charHeight: 27,
+  walkSwing: 0.55,
+  walkSwingRun: 0.7,
+  walkBob: 0.5,
+  gunHeight: 19,
   playerAccel: 1400,
   carAccel: 420,
   carBrake: 700,
@@ -93,7 +126,7 @@ export const MISSIONS = [
     brief: 'They hit my garage. Go to the warehouse district and settle it. All six of them.',
     reward: 2200 },
   { id: 5, name: 'The Big Score', giver: 'Vera Solano',
-    brief: 'A Comet GT sits in the downtown tower garage. Take it, bring it to the pier. Then run — they will all come.',
+    brief: 'A Comet GT sits in the downtown tower garage — right by SOLMARA BANK. Take it, bring it to the pier. Then run — they will all come.',
     reward: 5000 },
   { id: 6, name: 'Shop Job', giver: 'Vera Solano',
     brief: 'The corner store on Ocean Drive keeps its cash in a back safe. Walk in, take it, bring it to the garage.',

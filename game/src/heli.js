@@ -1,6 +1,8 @@
 // heli.js — SOLMARA 3D: the police helicopter.
 // Spawns at wanted 3+, hunts the player from the air, sweeps a searchlight at
 // night, shoots at wanted 4+, and can be shot down. All original geometry.
+// The searchlight tracks the player's head (~24 units up on the articulated
+// character rig) rather than the ground, so it stays on Jax while he runs.
 import * as THREE from 'three';
 import { clamp, lerp, range } from './random.js';
 
@@ -19,9 +21,10 @@ export function initHeli(scene) {
 
 function makeHeliMesh() {
   const group = new THREE.Group();
-  const white = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.35, metalness: 0.4 });
+  // clearcoat white paint + tinted glass: the chopper catches the sun like the cars do
+  const white = new THREE.MeshPhysicalMaterial({ color: 0xf2f2f2, roughness: 0.28, metalness: 0.4, clearcoat: 1.0, clearcoatRoughness: 0.1, envMapIntensity: 1.2 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x1a1d24, roughness: 0.5, metalness: 0.4 });
-  const glass = new THREE.MeshStandardMaterial({ color: 0x2a4a66, roughness: 0.1, metalness: 0.9 });
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x2a4a66, roughness: 0.06, metalness: 0.1, clearcoat: 1.0, clearcoatRoughness: 0.06, envMapIntensity: 1.6 });
   // cabin: smooth scaled sphere (no boxes)
   const cabin = new THREE.Mesh(new THREE.SphereGeometry(9, 18, 12), white);
   cabin.scale.set(1.7, 0.85, 1.0);
@@ -100,9 +103,29 @@ function makeHeliMesh() {
   star2.position.z = -9.3;
   star2.rotation.y = Math.PI;
   group.add(star2);
+  // navigation lights: red (port) + green (starboard) + a white strobe on the tail
+  const navRed = new THREE.Mesh(
+    new THREE.SphereGeometry(1.1, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0xff2020, emissive: 0xff2020, emissiveIntensity: 2.4 }),
+  );
+  navRed.position.set(2, -2, -9.6);
+  group.add(navRed);
+  const navGreen = new THREE.Mesh(
+    new THREE.SphereGeometry(1.1, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0x20ff60, emissive: 0x20ff60, emissiveIntensity: 2.4 }),
+  );
+  navGreen.position.set(2, -2, 9.6);
+  group.add(navGreen);
+  const strobe = new THREE.Mesh(
+    new THREE.SphereGeometry(1.0, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 2.0 }),
+  );
+  strobe.position.set(-42, 8, 0);
+  group.add(strobe);
   group.userData.rotor = rotor;
   group.userData.tailRotor = tailRotor;
   group.userData.cone = cone;
+  group.userData.strobe = strobe;
   return group;
 }
 
@@ -186,15 +209,33 @@ export function updateHeli(game, dt, R) {
         game.fireBullet(h.x, h.y, Math.atan2(dy, dx) + range(game.rng, -0.1, 0.1), 'enemy');
         game.audio.shotFar();
       }
-      // leave when the heat is off
+      // leave when the heat is off: fly home to the airport tower, then
+      // despawn over the runway instead of just vanishing mid-air.
       if (game.wanted < 2.5) {
         h.state = 'leaving';
-        h.x += Math.cos(h.angle) * 200 * dt;
-        h.y += Math.sin(h.angle) * 200 * dt;
-        if (d > 1100) {
-          sceneRef.remove(h.mesh);
-          game.helis.splice(i, 1);
-          continue;
+        const ap = game.world.landmarks ? game.world.landmarks.find((l) => l.id === 'airport') : null;
+        const home = ap ? { x: ap.cx + 52, y: ap.cy - 20 } : null;
+        if (home) {
+          const ha = Math.atan2(home.y - h.y, home.x - h.x);
+          let hdiff = ha - h.angle;
+          while (hdiff > Math.PI) hdiff -= Math.PI * 2;
+          while (hdiff < -Math.PI) hdiff += Math.PI * 2;
+          h.angle += clamp(hdiff, -1.6 * dt, 1.6 * dt);
+          h.x += Math.cos(h.angle) * 200 * dt;
+          h.y += Math.sin(h.angle) * 200 * dt;
+          if (Math.hypot(home.x - h.x, home.y - h.y) < 120) {
+            sceneRef.remove(h.mesh);
+            game.helis.splice(i, 1);
+            continue;
+          }
+        } else {
+          h.x += Math.cos(h.angle) * 200 * dt;
+          h.y += Math.sin(h.angle) * 200 * dt;
+          if (d > 1100) {
+            sceneRef.remove(h.mesh);
+            game.helis.splice(i, 1);
+            continue;
+          }
         }
       }
     }
@@ -204,13 +245,17 @@ export function updateHeli(game, dt, R) {
       h.mesh.rotation.y = -h.angle;
       h.mesh.userData.rotor.rotation.y = h.rotor;
       h.mesh.userData.tailRotor.rotation.x = h.rotor * 2.4;
+      // tail strobe blinks once a second
+      if (h.mesh.userData.strobe) {
+        h.mesh.userData.strobe.material.emissiveIntensity = (game.time % 1) < 0.12 ? 3.5 : 0.2;
+      }
       // searchlight: bright at night, aimed at the player
       const night = game.tod ? game.tod.dark : 0;
       const on = night > 0.3 && h.state !== 'falling';
       h.mesh.userData.cone.material.opacity = on ? 0.13 : 0;
       if (on && spotLight) {
         spotLight.position.set(h.x, h.z - 4, h.y);
-        spotTarget.position.set(p.x, 0, p.y);
+        spotTarget.position.set(p.x, 18, p.y); // chest height: the beam tracks Jax, not the ground
         spotLight.intensity = 900;
       } else if (spotLight && game.helis.length === 1) {
         spotLight.intensity = 0;

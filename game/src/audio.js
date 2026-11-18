@@ -77,6 +77,8 @@ export class AudioSys {
   explosion() { this.noise(0.7, 0.5, 500); this.tone(55, 0.6, 'sawtooth', 0.3, 28); }
   pickup() { this.tone(880, 0.09, 'sine', 0.18); setTimeout(() => this.tone(1320, 0.12, 'sine', 0.18), 70); }
   click() { this.tone(660, 0.05, 'square', 0.08); }
+  // footstep: a quiet low tick, called once per half walk cycle on foot
+  step() { this.noise(0.05, 0.05, 500); }
   missionStart() { this.tone(440, 0.12, 'triangle', 0.2); setTimeout(() => this.tone(660, 0.16, 'triangle', 0.2), 110); }
   missionComplete() {
     [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this.tone(f, 0.22, 'triangle', 0.22), i * 110));
@@ -110,6 +112,29 @@ export class AudioSys {
     const target = speed01 > 0.02 ? 0.05 + speed01 * 0.05 : 0;
     this.engineGain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.1);
     this.engineOsc.frequency.setTargetAtTime(55 + speed01 * 130, this.ctx.currentTime, 0.08);
+  }
+  // ambient world sound, called every frame: ocean surf near the beach,
+  // crickets after dark. Subtle — it sells the 3D world as a place.
+  ambience(dt, dark, nearWater, nearCoaster) {
+    if (!this.ctx || this.muted) return;
+    this.ambTimer = (this.ambTimer || 0) - dt;
+    if (this.ambTimer > 0) return;
+    if (nearCoaster) {
+      // rollercoaster whoosh: a soft filtered wind rush every ~4s
+      this.ambTimer = 4;
+      this.noise(0.9, 0.04, 900);
+    } else if (nearWater) {
+      // a slow wave wash every ~3.5s
+      this.ambTimer = 3.5;
+      this.noise(1.1, 0.05, 420);
+    } else if (dark > 0.4) {
+      // a cricket chirp every ~1.8s at night
+      this.ambTimer = 1.8;
+      this.tone(4200, 0.05, 'sine', 0.015);
+      setTimeout(() => this.tone(4400, 0.04, 'sine', 0.012), 90);
+    } else {
+      this.ambTimer = 2.5; // day: quiet city air
+    }
   }
   // radio music loop, stepped by the game clock; station set by setStation()
   music(dt, playing) {

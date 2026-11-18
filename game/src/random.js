@@ -1,4 +1,6 @@
 // random.js — tiny seeded RNG + helpers. Deterministic world gen, no Math.random in world code.
+// Pedestrian looks (meshes.js makePedLook) draw from this same seeded RNG, so
+// the crowd's variety is identical on every run with the same seed.
 export function mulberry32(seed) {
   let a = seed >>> 0;
   return function () {
@@ -28,4 +30,21 @@ export function hexLerp(c1, c2, t) {
   const a = p(c1), b = p(c2);
   const m = a.map((v, i) => Math.round(lerp(v, b[i], t)));
   return `rgb(${m[0]},${m[1]},${m[2]})`;
+}
+// Deterministic 2D hash (0..1) — stable texture/placement variation without
+// touching the seeded RNG stream, so world gen stays reproducible.
+export function hash2(x, y) {
+  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return s - Math.floor(s);
+}
+// Salted variant of hash2: same point, different salt, different value —
+// used for per-landmark variation (colours, prices) that must stay stable
+// across sessions without consuming the world RNG.
+export function hash3(x, y, salt) {
+  const s = Math.sin(x * 127.1 + y * 311.7 + salt * 74.7) * 43758.5453;
+  return s - Math.floor(s);
+}
+export function smoothstep(a, b, x) {
+  const t = clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
 }

@@ -7,6 +7,47 @@ import { CFG, PAL } from './config.js';
 const VERTICALS = [150, 350, 550, 750, 950, 1150, 1350, 1550, 1750, 1950, 2150, 2350];
 const HORIZONTALS = [150, 350, 550, 750, 950, 1150, 1350, 1550, 1750, 1950, 2150, 2350, 2550];
 
+// ---------- landmarks: one unmistakable building per block ----------
+// Each landmark replaces the generic buildings of its block with a custom
+// shape (built by landmarks.js). Rects are whole city blocks (roads at
+// 150/350/.../2350, horizontals at 150/.../2550); x/y are the block's inner
+// bounds (road edge + 26). The airport runway + school field + coaster
+// station are extra cleared rects, not buildings.
+const LANDMARK_DEFS = [
+  { id: 'bank', name: 'SOLMARA BANK', short: 'BANK', color: '#d9a441', x: 976, y: 976, w: 148, h: 148 },
+  { id: 'hotel', name: 'SOLMARA GRAND HOTEL', short: 'HOTEL', color: '#7fb8d8', x: 776, y: 776, w: 148, h: 148 },
+  { id: 'casino', name: 'CASINO SOLMARA', short: 'CASINO', color: '#ff2e88', x: 1376, y: 776, w: 148, h: 148 },
+  { id: 'police', name: 'SOLMARA POLICE HQ', short: 'POLICE', color: '#2e6bff', x: 1176, y: 1176, w: 148, h: 148 },
+  { id: 'bar', name: "JAX'S BAR", short: 'BAR', color: '#ff7a1a', x: 1576, y: 976, w: 148, h: 148 },
+  { id: 'mall', name: 'SOLMARA MALL', short: 'MALL', color: '#7cff3c', x: 1576, y: 1776, w: 148, h: 148 },
+  { id: 'fire', name: 'FIRE STATION 7', short: 'FIRE', color: '#ff2e2e', x: 376, y: 1176, w: 148, h: 148 },
+  { id: 'hospital', name: 'SOLMARA GENERAL', short: 'HOSPITAL', color: '#ffffff', x: 576, y: 1576, w: 148, h: 148 },
+  { id: 'church', name: 'ST. MARIA CHURCH', short: 'CHURCH', color: '#e8ddc8', x: 376, y: 1776, w: 148, h: 148 },
+  { id: 'gas', name: 'SOLMARA GAS', short: 'GAS', color: '#e8b62b', x: 2176, y: 976, w: 148, h: 148 },
+  { id: 'school', name: 'SOLMARA HIGH SCHOOL', short: 'SCHOOL', color: '#ffe93c', x: 776, y: 2176, w: 148, h: 148 },
+  { id: 'stadium', name: 'SOLMARA STADIUM', short: 'STADIUM', color: '#3aa655', x: 1976, y: 2176, w: 148, h: 148 },
+  { id: 'airport', name: 'SOLMARA AIRPORT', short: 'AIRPORT', color: '#4aa8ff', x: 1976, y: 2376, w: 148, h: 148 },
+];
+// Solid collision rects per landmark (offsets inside the landmark block).
+// Gas is mostly open: only the shop + pump islands are solid (the canopy is
+// overhead). School: only the classroom block (the field is open). Airport:
+// terminal + tower only (the runway is flat and drivable).
+const LANDMARK_SOLIDS = {
+  bank: [{ dx: 0, dy: 0, w: 148, h: 148 }],
+  hotel: [{ dx: 0, dy: 0, w: 148, h: 148 }],
+  casino: [{ dx: 0, dy: 0, w: 148, h: 148 }],
+  police: [{ dx: 0, dy: 0, w: 148, h: 148 }],
+  bar: [{ dx: 0, dy: 0, w: 148, h: 148 }],
+  mall: [{ dx: 0, dy: 0, w: 148, h: 148 }],
+  fire: [{ dx: 0, dy: 0, w: 148, h: 148 }],
+  hospital: [{ dx: 0, dy: 0, w: 148, h: 148 }],
+  church: [{ dx: 0, dy: 0, w: 148, h: 148 }],
+  gas: [{ dx: 49, dy: 12, w: 50, h: 36 }, { dx: 36, dy: 57, w: 16, h: 10 }, { dx: 96, dy: 57, w: 16, h: 10 }, { dx: 36, dy: 81, w: 16, h: 10 }, { dx: 96, dy: 81, w: 16, h: 10 }],
+  school: [{ dx: 9, dy: 49, w: 130, h: 50 }],
+  stadium: [{ dx: 0, dy: 0, w: 148, h: 148 }],
+  airport: [{ dx: 14, dy: 39, w: 120, h: 70 }, { dx: 117, dy: 45, w: 18, h: 18 }],
+};
+
 function districtAt(x, y) {
   if (x > 2350) return 'beach';
   if (x >= 1750 && x <= 2150 && y >= 350 && y <= 750) return 'park';
@@ -93,6 +134,32 @@ export function generateWorld(seed = 20261118) {
     if (d === 'residential' || d === 'oldtown') {
       const tn = rangeInt(rng, 1, 3);
       for (let t = 0; t < tn; t++) world.trees.push({ x: b.x + range(rng, 8, b.w - 8), y: b.y + range(rng, 8, b.h - 8), palm: chance(rng, 0.5) });
+    }
+  }
+
+  // --- landmarks: clear their blocks of generic buildings + pools, then ---
+  // plant the landmark footprints (collision rects) and the landmark list.
+  // Extra cleared rects: the school field (one block south of the school)
+  // and the coaster station in the park. The airport runway strip is empty
+  // grass south of the last road, so it needs no clearing.
+  world.landmarks = LANDMARK_DEFS.map((l) => ({
+    ...l, cx: l.x + l.w / 2, cy: l.y + l.h / 2, kind: l.id,
+  }));
+  const clearRects = [
+    ...LANDMARK_DEFS.map((l) => ({ x: l.x, y: l.y, w: l.w, h: l.h })),
+    { x: 976, y: 2176, w: 148, h: 148 }, // school field
+    { x: 1930, y: 648, w: 40, h: 26 },   // coaster station
+  ];
+  const insideAny = (cx, cy) => clearRects.some((r) => cx > r.x && cx < r.x + r.w && cy > r.y && cy < r.y + r.h);
+  world.buildings = world.buildings.filter((b) => !insideAny(b.x + b.w / 2, b.y + b.h / 2));
+  world.pools = world.pools.filter((p) => !insideAny(p.x + p.w / 2, p.y + p.h / 2));
+  for (const l of world.landmarks) {
+    const district = districtAt(l.cx, l.cy);
+    for (const s of LANDMARK_SOLIDS[l.id]) {
+      world.buildings.push({
+        x: l.x + s.dx, y: l.y + s.dy, w: s.w, h: s.h,
+        hgt: 12, roof: 0, district, landmark: l.id, color: l.color,
+      });
     }
   }
 
@@ -195,6 +262,12 @@ export function generateWorld(seed = 20261118) {
     const h = pick(rng2, HORIZONTALS);
     return { x: v + range(rng2, -8, 8), y: h + range(rng2, -8, 8) };
   };
+
+  // Crosswalk crossings: the city3d builder places zebra stripes at every
+  // intersection the player can actually drive through (east of the beach).
+  // Pedestrians are ~27 units tall with a ~7-unit shoulder span, so sidewalk
+  // targets stay 26+ units off the road centre (see entities.createPed).
+  world.crossings = world.intersections.filter((p) => p.x <= 2350);
 
   return world;
 }

@@ -1,17 +1,19 @@
 // main.js — SOLMARA entry point. Owns the game object, the loop, the state machine
 // (menu / playing / paused / gameover / missionComplete) and every glue method the
 // systems call: enterCar, fireBullet, damageCar, addWanted, killPlayer, saveGame.
-import { CFG, TUNING, STORY_INTRO } from './config.js';
+import { CFG, TUNING, STORY_INTRO, LANDMARK_TUNING } from './config.js';
 import { mulberry32, clamp } from './random.js';
 import { generateWorld } from './world.js';
 import { Input } from './input.js';
 import { AudioSys } from './audio.js';
-import { createPlayer, createCar, updatePlayerFoot, updatePlayerCar, updateCarPhysics } from './entities.js';
+import { createPlayer, createCar, updatePlayerFoot, updatePlayerCar, updateCarPhysics, spawnLandmarkVehicles } from './entities.js';
+import { makePedLook } from './meshes.js';
+import { nearestLandmark } from './landmarks.js';
 import { updateTrafficCar, collideCars, maintainPopulation, updatePeds } from './traffic.js';
 import { addWanted, updateWanted, updatePoliceCar, updateCop, policeSirenOn } from './police.js';
 import { fireBullet, updateBullets, damageCar, explodeCar, spawnExplosion, spawnParticle, spawnSparks, spawnBlood, updateParticles, addSkid, updateSkids } from './combat.js';
 import { startMission, updateMission, missionTarget, missionObjective, missionEnemyDown, completeMission, spawnCashBundles } from './missions.js';
-import { initRender3D, render3D } from './render3d.js';
+import { initRender3D, render3D, applyGraphicsQuality } from './render3d.js';
 import { SHOP_POS, updateShop, buyItem, closeShop } from './shop.js';
 import { spawnHeli, clearHelis } from './heli.js';
 import { drawHUD, showMenu, hideMenus, showToast } from './hud.js';
@@ -55,8 +57,23 @@ export function newGame(seed = 20261118) {
     shotMode: null,
     shopPos: SHOP_POS,
     shopHint: null,
+    camZoom: 1, // mouse-wheel camera zoom factor (0.7 close .. 1.6 far)
+    nearLandmark: null, // the landmark the player is standing in right now
+    landmarksSeen: [], // landmark ids already toasted (saved with the game)
+    showLandmarks: false, // L toggles the landmark legend on the HUD
   };
   initRender3D(game);
+  // landmark vehicles: interceptors at Police HQ, fire truck, school bus,
+  // ambulance, shoppers' cars at the mall — real parked cars, stealable.
+  spawnLandmarkVehicles(game);
+  // graphics quality from the last save (ULTRA by default); G cycles it live.
+  const saved = loadGame();
+  game.setQuality = (level) => {
+    applyGraphicsQuality(game, level);
+    const names = ['FAST', 'HIGH', 'ULTRA'];
+    game.showToast('GRAPHICS: ' + names[game.render3d.quality], 'G cycles quality · wheel zooms the camera');
+  };
+  if (saved && typeof saved.quality === 'number') applyGraphicsQuality(game, saved.quality);
 
   // --- glue methods (called by the systems) ---
   game.fireBullet = (x, y, a, from, dmg) => fireBullet(game, x, y, a, from, dmg);
@@ -94,7 +111,7 @@ export function newGame(seed = 20261118) {
     const p = game.player;
     if (car.driver === 'traffic') {
       // the driver bails and runs
-      const ped = { x: car.x + 30, y: car.y, angle: 0, speed: 150, state: 'flee', tx: car.x, ty: car.y, shirt: '#e8b62b', skin: '#c98a5a', wait: 2.5, fleeX: car.x, fleeY: car.y, walkPhase: 0 };
+      const ped = { x: car.x + 30, y: car.y, angle: 0, speed: 150, state: 'flee', tx: car.x, ty: car.y, shirt: '#e8b62b', skin: '#c98a5a', look: makePedLook(game.rng), wait: 2.5, fleeX: car.x, fleeY: car.y, walkPhase: 0 };
       game.peds.push(ped);
       if (!silent) game.addWanted(0.5);
     } else if (car.driver === 'parked' && !silent) {
@@ -178,6 +195,7 @@ export function newGame(seed = 20261118) {
     p.x = s.x; p.y = s.y; p.onFoot = true; p.car = null; p.dead = false;
     game.clock = s.clock;
     game.stats = s.stats || game.stats;
+    game.landmarksSeen = s.landmarksSeen || [];
     game.wanted = 0;
     game.storyDone = s.missionIndex >= 99;
     spawnCashBundles(game);
@@ -237,7 +255,7 @@ if (shot) {
   // pre-populate a little city life, then stage the shot
   for (let i = 0; i < 8; i++) {
     const pt = game.world.randomRoadPoint(game.rng);
-    game.peds.push({ x: pt.x + 30, y: pt.y + 30, angle: 0, speed: 44, state: 'walk', tx: pt.x, ty: pt.y, shirt: '#2b6fd9', skin: '#e8b88a', wait: 0, fleeX: 0, fleeY: 0, walkPhase: 0 });
+    game.peds.push({ x: pt.x + 30, y: pt.y + 30, angle: 0, speed: 44, state: 'walk', tx: pt.x, ty: pt.y, shirt: '#2b6fd9', skin: '#e8b88a', look: makePedLook(game.rng), wait: 0, fleeX: 0, fleeY: 0, walkPhase: 0 });
   }
   stageShot(game, shot);
   if (shot === 'start') showMenu(game, 'menu-start');
@@ -266,6 +284,48 @@ function frame(now) {
       game.audio.setMuted(!game.audio.muted);
       const b = document.getElementById('btn-sound');
       if (b) b.textContent = game.audio.muted ? 'SOUND: OFF' : 'SOUND: ON';
+    }
+    // G cycles graphics quality (ULTRA -> HIGH -> FAST); wheel zooms the camera
+    if (inp.hit('g')) game.setQuality((game.render3d.quality + 2) % 3);
+    // L toggles the landmark legend (BANK · POLICE · AIRPORT · ...) on the HUD
+    if (inp.hit('l')) game.showLandmarks = !game.showLandmarks;
+    // C toggles the character close-up camera (0.55 = Jax fills the frame)
+    if (inp.hit('c')) game.camZoom = game.camZoom < 0.6 ? 1 : 0.55;
+    const wheel = inp.takeWheel();
+    if (wheel) game.camZoom = clamp(game.camZoom + wheel * 0.0004, 0.7, 1.6);
+    // world ambience: surf near the beach, crickets after dark, coaster whoosh
+    const coaster = game.world.landmarks ? { x: 1950, y: 660 } : null;
+    const nearCoaster = coaster && Math.hypot(p.x - coaster.x, p.y - coaster.y) < LANDMARK_TUNING.coasterRadius;
+    game.audio.ambience(dt, game.tod ? game.tod.dark : 0, p.x > 2250, nearCoaster);
+    // landmark proximity: name toast on arrival, NOS at the gas station,
+    // slow heal at the bar — the city rewards knowing where things are.
+    const near = nearestLandmark(game.world, p.x, p.y);
+    game.nearLandmark = near;
+    if (near && !game.landmarksSeen.includes(near.id)) {
+      game.landmarksSeen.push(near.id);
+      game.showToast(near.name, 'Landmark discovered (' + game.landmarksSeen.length + '/13)');
+    }
+    const gas = game.world.landmarks ? game.world.landmarks.find((l) => l.id === 'gas') : null;
+    if (gas && !p.onFoot && p.car) {
+      const dGas = Math.hypot(p.x - gas.cx, p.y - gas.cy);
+      if (dGas < LANDMARK_TUNING.gasRadius && p.nos < 100) {
+        p.nos = Math.min(100, p.nos + LANDMARK_TUNING.gasRefill * dt);
+        if (p.nos >= 99.5 && !game.gasToasted) {
+          game.gasToasted = true;
+          game.showToast('NOS REFILLED', 'SOLMARA GAS — full tank, on the house.');
+        }
+      } else if (dGas >= LANDMARK_TUNING.gasRadius) game.gasToasted = false;
+    }
+    const bar = game.world.landmarks ? game.world.landmarks.find((l) => l.id === 'bar') : null;
+    if (bar && p.onFoot && p.hp < 100) {
+      const dBar = Math.hypot(p.x - bar.cx, p.y - bar.cy);
+      if (dBar < LANDMARK_TUNING.barRadius) {
+        p.hp = Math.min(100, p.hp + LANDMARK_TUNING.barHeal * dt);
+        if (p.hp >= 99.5 && !game.barToasted) {
+          game.barToasted = true;
+          game.showToast('PATCHED UP', "Jax's Bar — a drink and a bandage, good as new.");
+        }
+      } else game.barToasted = false;
     }
 
     // player

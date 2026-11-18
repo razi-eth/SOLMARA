@@ -5,8 +5,10 @@
 // 2D post pass (colour grade, vignette, film grain) on the HUD canvas.
 import * as THREE from 'three';
 import { buildCity3D } from './city3d.js';
-import { makeCarMesh, makePersonMesh, getTextures } from './meshes.js';
+import { makeCarMesh, makeCharacter, makePersonMesh, CHAR_GUN_Y, JAX_LOOK, COP_LOOK, GANG_LOOK, getTextures, makeEnvironmentMap } from './meshes.js';
+import { TUNING } from './config.js';
 import { initHeli, updateHeli } from './heli.js';
+import { updateLandmarks } from './landmarks.js';
 import { clamp, lerp } from './random.js';
 
 // My own day/night stops: hour -> sun height, darkness, lamp level, sky colours.
@@ -106,24 +108,37 @@ export function initRender3D(game) {
   renderer.setSize(1280, 800, false);
   renderer.setPixelRatio(1);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  renderer.toneMappingExposure = 1.12;
   renderer.shadowMap.enabled = !software;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0xbfe0f0, 700, 2600);
+  // Environment map: a procedural sky baked into a PMREM so car paint, glass,
+  // windows and wet asphalt reflect the sky instead of looking flat. This is
+  // the single biggest realism win in the whole renderer.
+  try {
+    scene.environment = makeEnvironmentMap(renderer);
+    scene.environmentIntensity = 0.55;
+  } catch (e) { /* software GL without PMREM support: materials still work */ }
   const camera = new THREE.PerspectiveCamera(62, 1280 / 800, 1, 7000);
 
   // lights
   const sun = new THREE.DirectionalLight(0xfff2cc, 2.4);
   sun.castShadow = !software;
-  sun.shadow.mapSize.set(1024, 1024);
-  sun.shadow.camera.left = -380; sun.shadow.camera.right = 380;
-  sun.shadow.camera.top = 380; sun.shadow.camera.bottom = -380;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -320; sun.shadow.camera.right = 320;
+  sun.shadow.camera.top = 320; sun.shadow.camera.bottom = -320;
   sun.shadow.camera.near = 10; sun.shadow.camera.far = 2600;
   sun.shadow.bias = -0.0006;
   scene.add(sun);
   scene.add(sun.target);
+  // muzzle-flash / explosion light: one pooled point light, fired by combat
+  // via game.spawnFlash — gunfire actually lights the street at night.
+  const flashLight = new THREE.PointLight(0xffd970, 0, 260, 1.8);
+  flashLight.position.set(0, -100, 0);
+  scene.add(flashLight);
+  let flashLife = 0;
   const hemi = new THREE.HemisphereLight(0x9fd4ff, 0x3a4a2a, 0.75);
   scene.add(hemi);
   const moon = new THREE.DirectionalLight(0x8aa8ff, 0.0);
@@ -230,9 +245,44 @@ export function initRender3D(game) {
     carMeshes, peopleMeshes, bullets, cashMeshes, skids, beacon, beaconRing,
     shopBeacon, firePts, smokePts, vig, grain, raycaster, groundPlane, ndc,
     software, camYaw: -Math.PI / 2, camDist: 60, camHeight: 26,
+    flashLight, quality: 2,
+  };
+  // spawnFlash(x, y, color): combat calls this on every shot / explosion —
+  // the pooled light flares for ~90 ms and decays, lighting nearby walls.
+  game.spawnFlash = (x, y, color) => {
+    flashLight.position.set(x, 18, y);
+    flashLight.color.set(color || 0xffd970);
+    flashLight.intensity = 420;
+    flashLife = 0.09;
+  };
+  game._flashTick = (dt) => {
+    if (flashLife > 0) {
+      flashLife -= dt;
+      flashLight.intensity = Math.max(0, flashLight.intensity * (1 - dt * 22));
+      if (flashLife <= 0) flashLight.intensity = 0;
+    }
   };
   game.tod = dayState(game.clock);
   return game.render3d;
+}
+
+// Graphics quality: G cycles ULTRA (2048 shadows) -> HIGH (1024) -> FAST
+// (shadows off). The verify harness and screenshots always run ULTRA.
+export function applyGraphicsQuality(game, level) {
+  const R = game.render3d;
+  if (!R) return;
+  R.quality = ((level % 3) + 3) % 3;
+  if (R.software) { R.sun.castShadow = false; return; }
+  if (R.quality === 0) {
+    R.sun.castShadow = false;
+  } else {
+    R.sun.castShadow = true;
+    const size = R.quality === 2 ? 2048 : 1024;
+    if (R.sun.shadow.mapSize.x !== size) {
+      R.sun.shadow.mapSize.set(size, size);
+      if (R.sun.shadow.map) { R.sun.shadow.map.dispose(); R.sun.shadow.map = null; }
+    }
+  }
 }
 
 function syncCar(R, car, dt, time) {
@@ -253,19 +303,63 @@ function syncCar(R, car, dt, time) {
     mesh.userData.lightRed.material.emissiveIntensity = ph ? 2.6 : 0.25;
     mesh.userData.lightBlue.material.emissiveIntensity = ph ? 0.25 : 2.6;
   }
+  // brake lights flare when the car brakes; headlight beams + road pool at night
+  const night = R && R.nightF !== undefined ? R.nightF : 0;
+  if (mesh.userData.tailLeft) {
+    const braking = !!car.brakeLight;
+    mesh.userData.tailLeft.material.emissiveIntensity = braking ? 3.2 : 0.9;
+    mesh.userData.tailRight.material.emissiveIntensity = braking ? 3.2 : 0.9;
+  }
+  if (mesh.userData.beamMat) {
+    const on = night > 0.25 && car.speed !== undefined;
+    mesh.userData.beamMat.opacity = on ? 0.16 : 0;
+    mesh.userData.lightPool.material.opacity = on ? 0.35 : 0;
+  }
   return mesh;
 }
 
-function syncPerson(R, e, shirt, skin, armed, isPlayer) {
+function syncPerson(R, e, armed, isPlayer, time) {
   let mesh = R.peopleMeshes.get(e);
   if (!mesh) {
-    mesh = makePersonMesh(shirt, skin);
+    // look comes from the entity (peds/cops/enemies set it at spawn); fall
+    // back to the entity's shirt/skin or the role defaults so old saves and
+    // inline-spawned peds still get a full character, not a capsule.
+    const look = e.look || (isPlayer ? JAX_LOOK : e.kind === 'cop' ? COP_LOOK : e.kind === 'gang' ? GANG_LOOK : { kind: 'man', shirt: e.shirt || '#888888', skin: e.skin || '#e8b88a' });
+    mesh = makeCharacter(look);
     R.scene.add(mesh);
     R.peopleMeshes.set(e, mesh);
   }
-  mesh.position.set(e.x, Math.abs(Math.sin(e.walkPhase || 0)) * (e.moving ? 1.6 : 0.9), e.y);
+  // moving = the walk phase advanced since last frame (peds/cops/enemies only
+  // advance it while walking) or the player's own moving flag.
+  const ph = e.walkPhase || 0;
+  const last = mesh.userData.lastPhase ?? ph;
+  const moving = e.moving === true || Math.abs(ph - last) > 0.0001;
+  mesh.userData.lastPhase = ph;
+  const u = mesh.userData;
+  // walk cycle: legs swing opposite, arms counter-swing; running swings wider.
+  const amp = e.run ? TUNING.walkSwingRun : TUNING.walkSwing;
+  const sw = moving ? Math.sin(ph) * amp : 0;
+  if (u.legL) { u.legL.rotation.z = sw; u.legR.rotation.z = -sw; }
+  if (armed) {
+    // aim pose: right arm forward holding the gun, left hand supporting.
+    // The gun counter-rotates so its barrel stays level while the arm rises.
+    if (u.armR) u.armR.rotation.z = 1.25;
+    if (u.armL) u.armL.rotation.z = 0.8;
+    if (u.gun) u.gun.rotation.z = -1.15;
+  } else {
+    if (u.armL) u.armL.rotation.z = -sw * 0.8;
+    if (u.armR) u.armR.rotation.z = sw * 0.8;
+    if (u.gun) u.gun.rotation.z = 0;
+  }
+  // feet stay on the ground: only a small body bob, the leg swing does the rest.
+  mesh.position.set(e.x, moving ? Math.abs(Math.sin(ph)) * TUNING.walkBob : 0, e.y);
   mesh.rotation.y = -e.angle;
-  mesh.rotation.z = e.moving ? Math.sin(e.walkPhase || 0) * 0.05 : 0;
+  mesh.rotation.z = moving ? Math.sin(ph) * 0.02 : 0;
+  // idle life: breathing bob of the head + slow look-around when standing still.
+  if (u.head) {
+    u.head.rotation.y = moving ? 0 : Math.sin(time * 0.6) * 0.2;
+    u.head.position.y = 23.8 + (moving ? 0 : Math.sin(time * 2.2) * 0.12);
+  }
   mesh.userData.gun.visible = !!armed;
   return mesh;
 }
@@ -282,7 +376,7 @@ function writePoints(points, list, wantAdditive) {
     if (isAdd !== wantAdditive) continue;
     const a = clamp(p.life / p.maxLife, 0, 1);
     c.set(p.color);
-    pos[n * 3] = p.x; pos[n * 3 + 1] = 12 + (p.kind === 'smoke' ? (1 - a) * 30 : 0); pos[n * 3 + 2] = p.y;
+    pos[n * 3] = p.x; pos[n * 3 + 1] = (p.kind === 'flash' ? CHAR_GUN_Y : p.kind === 'blood' ? 18 : 12) + (p.kind === 'smoke' ? (1 - a) * 30 : 0); pos[n * 3 + 2] = p.y;
     col[n * 3] = c.r; col[n * 3 + 1] = c.g; col[n * 3 + 2] = c.b;
     siz[n] = p.kind === 'smoke' ? p.size * 2.2 : p.size * (0.5 + a);
     n++;
@@ -314,16 +408,39 @@ export function render3D(game, dt) {
   R.scene.fog.color.copy(tod.fog);
   R.scene.fog.near = 650 - tod.dark * 150;
   R.scene.fog.far = 2500 - tod.dark * 500;
+  R.nightF = tod.dark; // 0 = noon, ~0.66 = deep night; cars read it for beams
+  // sky dome: gradient + sun disc + drifting clouds + moon
   R.city.skyMat.uniforms.top.value.copy(tod.skyTop);
   R.city.skyMat.uniforms.mid.value.copy(tod.skyMid);
   R.city.skyMat.uniforms.bot.value.copy(tod.skyBot);
+  R.city.skyMat.uniforms.sunDir.value.copy(tod.sunDir);
+  R.city.skyMat.uniforms.sunColor.value.set(tod.dark > 0.4 ? 0x9fb8ff : 0xfff2cc);
+  R.city.skyMat.uniforms.night.value = tod.dark;
+  R.city.skyMat.uniforms.time.value = time;
   R.city.stars.material.opacity = clamp((tod.dark - 0.35) * 1.6, 0, 0.9);
   for (const sp of R.city.lampGlows) sp.material.opacity = tod.lamp * 0.5;
-  // water shimmer
-  R.city.waterMat.map.offset.x = time * 0.008;
-  R.city.waterMat.map.offset.y = time * 0.004;
+  // facade windows glow after dark via their emissive maps
+  for (const fm of R.city.facadeMats) fm.emissiveIntensity = 0.12 + tod.lamp * 0.9;
+  // ocean shader: waves + sun glint + fog
+  const wu = R.city.waterMat.uniforms;
+  wu.time.value = time;
+  wu.sunDir.value.copy(tod.sunDir);
+  wu.sunColor.value.set(tod.dark > 0.4 ? 0x8aa8ff : 0xfff2cc);
+  wu.sky.value.copy(tod.skyMid);
+  wu.fogColor.value.copy(tod.fog);
+  wu.fogNear.value = R.scene.fog.near;
+  wu.fogFar.value = R.scene.fog.far;
   // ferris wheel turns
   R.city.ferris.userData.wheel.rotation.z = time * 0.12;
+  // landmarks: coaster cars ride the loop, airport beacon sweeps, police bar flashes
+  if (R.city.landmarkAnims) updateLandmarks(R.city.landmarkAnims, time, dt);
+  // muzzle-flash light decay
+  if (game._flashTick) game._flashTick(dt);
+  // mission beacon colour (missions set their own beacon colour)
+  if (game.mission && game.mission.beaconColor) {
+    R.beacon.material.color.set(game.mission.beaconColor);
+    R.beaconRing.material.color.set(game.mission.beaconColor);
+  }
 
   // ---------- camera ----------
   const cam = game.camera;
@@ -340,8 +457,8 @@ export function render3D(game, dt) {
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
     R.camYaw += diff * Math.min(1, dt * 3.2);
-    dist = p.onFoot ? 52 : 66;
-    height = p.onFoot ? 24 : 28;
+    dist = (p.onFoot ? 52 : 66) * (game.camZoom || 1);
+    height = (p.onFoot ? 24 : 28) * (game.camZoom || 1);
     lookAhead = p.onFoot ? 26 : 46;
     R.camDist = lerp(R.camDist, dist, Math.min(1, dt * 2));
     R.camHeight = lerp(R.camHeight, height, Math.min(1, dt * 2));
@@ -374,19 +491,19 @@ export function render3D(game, dt) {
   // ---------- sync people ----------
   const seenPeople = new Set();
   for (const pd of game.peds) {
-    syncPerson(R, pd, pd.shirt, pd.skin, false, false);
+    syncPerson(R, pd, false, false, time);
     seenPeople.add(pd);
   }
   for (const cp of game.cops) {
-    syncPerson(R, cp, '#1a3a8a', '#e8b88a', true, false);
+    syncPerson(R, cp, true, false, time);
     seenPeople.add(cp);
   }
   for (const e of game.enemies) {
-    syncPerson(R, e, e.shirt, e.skin, true, false);
+    syncPerson(R, e, true, false, time);
     seenPeople.add(e);
   }
   if (p.onFoot && !p.dead) {
-    syncPerson(R, p, '#e8e8e8', '#e8b88a', true, true);
+    syncPerson(R, p, true, true, time);
     seenPeople.add(p);
   }
   for (const [e, mesh] of [...R.peopleMeshes]) {
@@ -440,6 +557,9 @@ export function render3D(game, dt) {
   if (game.shopPos) {
     R.shopBeacon.visible = true;
     R.shopBeacon.position.set(game.shopPos.x, 110, game.shopPos.y);
+    // the shop beacon breathes so the player notices the green pillar
+    // (shop.js speeds the pulse up as the player gets closer)
+    R.shopBeacon.material.opacity = 0.16 + Math.sin(time * (game.shopPulse || 2.2)) * 0.06;
   }
 
   // ---------- particles ----------

@@ -1,5 +1,7 @@
 // combat.js — bullets, explosions, particles, skid marks, blood. The action juice.
 // Particles are pooled and capped so the graphics mod never tanks the frame rate.
+// Particle heights are mapped in render3d's writePoints: muzzle flashes at the
+// gun (~19 units on the articulated characters), blood at torso height (~18).
 import { TUNING } from './config.js';
 import { clamp, range, pick } from './random.js';
 
@@ -11,6 +13,8 @@ export function fireBullet(game, x, y, angle, from, dmg) {
     life: 0.9, from, angle, dmg: dmg || TUNING.bulletDamage,
   });
   game.spawnParticle(x, y, Math.cos(angle) * 60, Math.sin(angle) * 60, 0.08, 7, 'rgba(255,230,150,0.95)', 'flash');
+  // muzzle flash: a real light in the 3D scene, so the shot lights the street
+  if (game.spawnFlash) game.spawnFlash(x, y, 0xffd970);
   game.shotsFiredRecently = 1.5;
 }
 
@@ -135,6 +139,19 @@ export function explodeCar(game, car) {
   game.spawnExplosion(car.x, car.y);
   game.audio.explosion();
   game.addShake(12);
+  // gas station hazard: a car blowing up next to the pumps sets the whole
+  // forecourt off — a second, bigger blast and a warning toast.
+  const gas = game.world.landmarks ? game.world.landmarks.find((l) => l.id === 'gas') : null;
+  if (gas && gas.pumps) {
+    for (const p of gas.pumps) {
+      if (Math.hypot(car.x - p.x, car.y - p.y) < 70) {
+        game.spawnExplosion(car.x, car.y);
+        game.addShake(10);
+        game.showToast('GAS STATION!', 'The pumps went up — get clear!');
+        break;
+      }
+    }
+  }
   if (car.driver === 'player') {
     game.player.hp -= 35;
     game.exitCar(true);
@@ -167,6 +184,8 @@ export function spawnExplosion(game, x, y) {
   }
   game.spawnParticle(x, y, 0, 0, 0.28, 90, 'rgba(255,240,180,0.9)', 'ring');
   game.spawnParticle(x, y, 0, 0, 0.12, 60, 'rgba(255,255,255,0.9)', 'flash');
+  // the blast lights the whole block for a moment
+  if (game.spawnFlash) game.spawnFlash(x, y, 0xff8822);
 }
 
 export function spawnParticle(game, x, y, vx, vy, life, size, color, kind) {

@@ -2,6 +2,7 @@
 // pedestrians. Creation + movement. AI lives in traffic.js / police.js.
 import { TUNING, CAR_TYPES, WEAPONS } from './config.js';
 import { clamp, lerp, angDiff, dist2, pick, range } from './random.js';
+import { makePedLook, JAX_LOOK } from './meshes.js';
 
 let nextId = 1;
 
@@ -11,7 +12,7 @@ export function createPlayer(world) {
     vx: 0, vy: 0, angle: -Math.PI / 2, hp: TUNING.playerHp, money: 0,
     onFoot: true, car: null, aimAngle: -Math.PI / 2,
     shootCd: 0, run: false, dead: false, busted: false,
-    walkPhase: 0, moving: false,
+    walkPhase: 0, moving: false, look: JAX_LOOK,
     weapon: 'pistol', owned: { shotgun: false, smg: false },
     ammo: { shotgun: 0, smg: 0 }, nos: 100, station: 0,
   };
@@ -19,22 +20,60 @@ export function createPlayer(world) {
 
 export function createCar(world, rng, type, x, y, angle, driver) {
   const t = CAR_TYPES[type] || CAR_TYPES.sedan;
+  // plate code + trim: the 3D builder stamps a real license plate on every car
+  const plate = 'SOL-' + String(100 + Math.floor(rng() * 900));
   return {
     id: nextId++, type, x, y, angle,
     vx: 0, vy: 0, speed: 0, w: t.w, h: t.h,
     color: type === 'taxi' ? '#f2c200' : type === 'police' ? '#f2f2f2' : pick(rng, ['#d9382b', '#2b6fd9', '#e8b62b', '#3aa655', '#e8e8e8', '#222831', '#8a2fd9', '#ff7a1a', '#18b8a8', '#c9a227']),
+    plate, trim: pick(rng, ['#d8dde6', '#b8bcc4', '#8a8f9a']),
     hp: t.hp, maxHp: t.hp, driver: driver || null,
     target: null, stuck: 0, siren: type === 'police', sirenPhase: rng() * 6,
     smoke: 0, skid: 0, brakeLight: false,
   };
 }
 
+// Parked landmark vehicles: two interceptors outside Police HQ, a fire truck
+// at the station, a yellow school bus at the school, and a couple of cars at
+// the mall lot. They are ordinary parked cars the player can steal.
+export function spawnLandmarkVehicles(game) {
+  const w = game.world;
+  const lm = (id) => (w.landmarks || []).find((l) => l.id === id);
+  const park = (type, color, plate, x, y, angle) => {
+    const c = createCar(w, game.rng, type, x, y, angle, 'parked');
+    c.color = color; c.plate = plate;
+    game.cars.push(c);
+    return c;
+  };
+  const hq = lm('police');
+  if (hq) {
+    park('police', '#f2f2f2', 'PD-07', hq.cx - 34, hq.cy + 58, Math.PI / 2);
+    park('police', '#f2f2f2', 'PD-12', hq.cx + 34, hq.cy + 58, Math.PI / 2);
+  }
+  const fire = lm('fire');
+  if (fire) park('truck', '#c02020', 'FD-07', fire.cx - 20, fire.cy + 58, Math.PI / 2);
+  const hospital = lm('hospital');
+  if (hospital) park('van', '#f2f2f2', 'EMS-1', hospital.cx - 30, hospital.cy + 58, Math.PI / 2);
+  const school = lm('school');
+  if (school) park('van', '#f2c200', 'BUS-1', school.cx + 40, school.cy + 52, Math.PI / 2);
+  const mall = lm('mall');
+  if (mall) {
+    park('sedan', '#d9382b', 'SOL-214', mall.cx - 55, mall.cy + 88, Math.PI / 2);
+    park('coupe', '#2b6fd9', 'SOL-318', mall.cx - 33, mall.cy + 88, Math.PI / 2);
+    park('sedan', '#3aa655', 'SOL-451', mall.cx + 33, mall.cy + 88, Math.PI / 2);
+    park('van', '#e8e8e8', 'SOL-502', mall.cx + 55, mall.cy + 88, Math.PI / 2);
+  }
+}
+
 export function createPed(world, rng, x, y) {
-  const colors = ['#d9382b', '#2b6fd9', '#e8b62b', '#3aa655', '#8a2fd9', '#ff7a1a', '#18b8a8', '#e8e8e8', '#f2a0c0'];
+  // every pedestrian gets a full look (kind, hair, outfit, height) so no two
+  // on the same sidewalk are identical; shirt/skin mirror the look for any
+  // legacy reader.
+  const look = makePedLook(rng);
   return {
     id: nextId++, x, y, angle: range(rng, 0, Math.PI * 2),
     speed: range(rng, 34, 58), state: 'walk', tx: x, ty: y,
-    shirt: pick(rng, colors), skin: pick(rng, ['#e8b88a', '#c98a5a', '#8a5a34', '#f2c9a0']),
+    shirt: look.shirt, skin: look.skin, look,
     wait: 0, fleeX: 0, fleeY: 0, walkPhase: range(rng, 0, 6),
   };
 }
@@ -53,7 +92,10 @@ export function updatePlayerFoot(game, dt) {
   p.x = c.x; p.y = c.y;
   p.moving = Math.abs(p.vx) + Math.abs(p.vy) > 20;
   p.run = running && p.moving;
+  const prevPhase = p.walkPhase;
   if (p.moving) p.walkPhase += dt * (running ? 14 : 9);
+  // footsteps: a quiet tick each time a foot plants (every half walk cycle)
+  if (p.moving && Math.floor(p.walkPhase / Math.PI) !== Math.floor(prevPhase / Math.PI)) game.audio.step();
   // aim at mouse (screen -> world)
   const m = game.screenToWorld(inp.mouse.x, inp.mouse.y);
   p.aimAngle = Math.atan2(m.y - p.y, m.x - p.x);

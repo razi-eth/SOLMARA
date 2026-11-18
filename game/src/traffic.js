@@ -49,6 +49,8 @@ export function updateTrafficCar(game, car, dt) {
   const aim = Math.atan2(ty - car.y, tx - car.x);
   const diff = ((aim - car.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
   const steer = clamp(diff * 2.2, -1, 1);
+  // traffic headlights come on after dark (the 3D builder lights the beams)
+  car.lightsOn = game.tod ? game.tod.dark > 0.25 : false;
   // slow for a car ahead
   let throttle = 0.55;
   const ahead = carAhead(game, car, 70);
@@ -117,8 +119,12 @@ export function maintainPopulation(game, dt) {
       const p = game.world.randomRoadPoint(game.rng);
       const d = Math.hypot(p.x - game.player.x, p.y - game.player.y);
       if (d < 260 || d > 900) continue;
-      const type = pick(game.rng, ['sedan', 'coupe', 'van', 'sport', 'taxi']);
+      // the school bus runs its route past the school: a yellow van near it
+      const school = game.world.landmarks ? game.world.landmarks.find((l) => l.id === 'school') : null;
+      const nearSchool = school && Math.hypot(p.x - school.cx, p.y - school.cy) < 420;
+      const type = nearSchool && game.rng() < 0.6 ? 'van' : pick(game.rng, ['sedan', 'coupe', 'van', 'sport', 'taxi']);
       const car = createCar(game.world, game.rng, type, p.x + range(game.rng, -10, 10), p.y + range(game.rng, -10, 10), range(game.rng, 0, Math.PI * 2), 'parked');
+      if (nearSchool && type === 'van') car.color = '#f2c200'; // school bus yellow
       game.cars.push(car);
       break;
     }

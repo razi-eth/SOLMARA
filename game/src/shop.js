@@ -1,6 +1,8 @@
 // shop.js — SOLMARA 3D: the gun shop + the safehouse.
 // Walk up to the green beacon, press E, buy weapons and ammo with mission cash.
 // The safehouse (south residential) heals you and saves the game.
+// No shopkeeper NPC: the shop is a beacon + menu, so it works even when the
+// street is empty and no pedestrian is nearby.
 export const SHOP_POS = { x: 1330, y: 1130 };
 
 export const SHOP_ITEMS = [
@@ -65,6 +67,11 @@ export function closeShop(game) {
 export function updateShop(game, dt) {
   const p = game.player;
   ensureWeaponState(p);
+  // the shop beacon pulses faster as the player gets closer (render3d reads it)
+  if (game.render3d) {
+    const d = Math.hypot(p.x - SHOP_POS.x, p.y - SHOP_POS.y);
+    game.shopPulse = d < 300 ? 2.2 + (1 - d / 300) * 4 : 2.2;
+  }
   if (game.state !== 'playing' || !p.onFoot) return;
   const dShop = Math.hypot(p.x - SHOP_POS.x, p.y - SHOP_POS.y);
   if (dShop < 55 && game.input.hit('e')) {
@@ -82,7 +89,7 @@ export function updateShop(game, dt) {
   // hint toasts (throttled by the game's toast timer)
   if (dShop < 55 && game.shopHint !== 'shop') {
     game.shopHint = 'shop';
-    game.showToast('GUN SHOP', 'Press E to buy weapons and ammo.');
+    game.showToast('GUN SHOP — by SOLMARA BANK', 'Press E to buy weapons and ammo.');
   } else if (dSafe < 60 && game.shopHint !== 'safe') {
     game.shopHint = 'safe';
     game.showToast('SAFEHOUSE', 'Press E to heal and save.');

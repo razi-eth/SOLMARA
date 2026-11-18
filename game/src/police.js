@@ -2,6 +2,7 @@
 // when the player stays clean and out of sight; police cars ram and foot cops chase.
 import { createCar, updateCarPhysics } from './entities.js';
 import { clamp, pick, range } from './random.js';
+import { COP_LOOK } from './meshes.js';
 
 export function wantedLevel(game) {
   return Math.min(5, Math.floor(game.wanted));
@@ -19,6 +20,21 @@ export function addWanted(game, amount) {
 function spawnPolice(game, n) {
   const w = game.world;
   for (let i = 0; i < n; i++) {
+    // half the time the unit rolls out of Police HQ (on the road beside it)
+    // instead of appearing out of thin air — the HQ is their home.
+    const hq = w.landmarks ? w.landmarks.find((l) => l.id === 'police') : null;
+    if (hq && game.rng() < 0.5) {
+      const fromHq = game.rng() < 0.5
+        ? { x: 1150, y: hq.cy + range(game.rng, -40, 40) }
+        : { x: hq.cx + range(game.rng, -40, 40), y: 1150 };
+      if (!w.inBuilding(fromHq.x, fromHq.y) && !w.isWater(fromHq.x, fromHq.y)) {
+        const car = createCar(w, game.rng, 'police', fromHq.x, fromHq.y, range(game.rng, 0, Math.PI * 2), 'police');
+        car.cruise = 300;
+        game.policeCars.push(car);
+        game.cars.push(car);
+        continue;
+      }
+    }
     for (let tries = 0; tries < 10; tries++) {
       const a = range(game.rng, 0, Math.PI * 2);
       const d = range(game.rng, 420, 700);
@@ -33,7 +49,7 @@ function spawnPolice(game, n) {
       } else {
         game.cops.push({
           x, y, angle: a, hp: 100, speed: 150, state: 'chase',
-          shootCd: 0, arrest: 0, walkPhase: 0,
+          shootCd: 0, arrest: 0, walkPhase: 0, kind: 'cop', look: COP_LOOK,
         });
       }
       break;
@@ -98,6 +114,8 @@ export function updatePoliceCar(game, car, dt) {
   if (d < 60 && Math.abs(car.speed) > 240) throttle = 0.2;
   updateCarPhysics(game, car, dt, throttle, steer);
   car.sirenPhase += dt * 7;
+  // brake lights flare when the interceptor slows to ram
+  car.brakeLight = throttle < 0.5;
   // ramming damage to the player's car / player
   if (d < (car.w + 20) * 0.5) {
     if (p.car) {
